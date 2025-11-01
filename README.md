@@ -4,7 +4,7 @@ A fully local scheduling agent built with FastAPI, LangChain, LangGraph, and Nex
 
 ## 🎬 Demo Video
 
-https://github.com/user-attachments/assets/memora_agent_demo.mp4
+https://github.com/DurishettyAnirudh/Memora_Scheduling_Agent/blob/main/Memora_Agent%20-%20Made%20with%20Clipchamp.mp4
 
 <video width="100%" controls autoplay loop>
   <source src="Memora_Agent - Made with Clipchamp.mp4" type="video/mp4">
