@@ -1,0 +1,14 @@
+langchain>=0.2.0
+langgraph>=0.1.0
+langchain-ollama>=0.1.0
+fastapi>=0.104.1
+uvicorn>=0.24.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
+requests>=2.32.0
+
+# Document processing dependencies
+chromadb>=0.4.15
+sentence-transformers>=2.2.2
+PyPDF2>=3.0.1
+python-docx>=0.8.11

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "ef28becf-2e18-4fb1-8152-f94906f7e6a5",
+    "title": "meeting",
+    "description": "",
+    "date": "2025-10-17",
+    "start_time": "18:30",
+    "end_time": null,
+    "status": "pending",
+    "priority": "medium",
+    "created_at": "2025-10-16T22:22:25.143261",
+    "updated_at": "2025-10-16T22:22:25.143261"
+  }
+]

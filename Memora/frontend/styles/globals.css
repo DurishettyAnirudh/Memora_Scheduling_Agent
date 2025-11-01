@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.fc-event {
+    border-radius: 6px !important;
+    padding: 2px 4px !important;
+}
+
+.fc-daygrid-event {
+    font-size: 0.875rem !important;
+}

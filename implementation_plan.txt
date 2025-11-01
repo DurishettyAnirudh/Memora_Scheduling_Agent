@@ -1,0 +1,852 @@
+# Comprehensive Scene-by-Scene Development Plan for Local Scheduling Agent
+
+Based on your hardware specifications (RTX 3050 8GB, Ryzen 7 5800H) and requirements, here's a detailed implementation plan that GitHub Copilot or Claude 4 can execute step by step.[1][2][3][4][5]
+
+## **Recommended LLM Model Selection**
+
+For your RTX 3050 8GB VRAM, the optimal models are:
+- **Primary Choice**: Qwen 2.5 7B (4.7GB VRAM) - Superior performance for scheduling tasks[4][5][6]
+- **Alternative**: Llama 3.2 8B (4.9GB VRAM) - Good context handling for task management[1][4]
+- **Backup**: Qwen 2.5 3B (1.9GB VRAM) - If memory constraints arise[4]
+
+***
+
+## **Scene 1: Project Foundation Setup**
+
+### **1.1 Directory Structure Creation**
+```
+scheduling-agent/
+├── backend/
+│   ├── main.py
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── scheduler_agent.py
+│   │   └── tools.py
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── tasks.json
+│   │   └── database.py
+│   ├── config/
+│   │   └── settings.py
+│   └── requirements.txt
+├── frontend/
+│   ├── package.json
+│   ├── next.config.js
+│   ├── pages/
+│   │   ├── chat.js
+│   │   └── calendar.js
+│   ├── components/
+│   │   ├── ChatInterface.js
+│   │   └── CalendarView.js
+│   └── styles/
+└── README.md
+```
+
+### **1.2 Backend Dependencies Installation**
+```bash
+# requirements.txt content
+langchain==0.1.0
+langgraph==0.0.40
+langchain-ollama==0.1.0
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+```
+
+### **1.3 Frontend Dependencies Installation**
+```bash
+# package.json content for Next.js
+npm install next react react-dom @fullcalendar/core @fullcalendar/react @fullcalendar/daygrid @fullcalendar/timegrid axios
+```
+
+***
+
+## **Scene 2: Ollama Integration & Model Setup**
+
+### **2.1 Ollama Configuration**
+```python
+# config/settings.py
+OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_MODEL = "qwen2.5:7b"  # Optimal for RTX 3050
+ALTERNATIVE_MODELS = ["llama3.2:8b", "qwen2.5:3b"]
+```
+
+### **2.2 Model Testing Script**
+```python
+# Test Ollama connection and model performance
+from langchain_ollama import OllamaLLM
+
+def test_model_performance(model_name):
+    llm = OllamaLLM(model=model_name, base_url=OLLAMA_BASE_URL)
+    test_prompt = "Create a task: Meeting with client tomorrow at 3 PM"
+    response = llm.invoke(test_prompt)
+    return response
+```
+
+***
+
+## **Scene 3: Data Layer Implementation**
+
+### **3.1 Task Data Structure**
+```python
+# data/database.py
+from pydantic import BaseModel
+from datetime import datetime
+from typing import Optional, List
+import json
+import os
+
+class Task(BaseModel):
+    id: str
+    title: str
+    description: Optional[str] = ""
+    date: datetime
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    status: str = "pending"  # pending, completed, cancelled
+    priority: str = "medium"  # low, medium, high
+    created_at: datetime = datetime.now()
+```
+
+### **3.2 CRUD Operations**
+```python
+class TaskManager:
+    def __init__(self, file_path="data/tasks.json"):
+        self.file_path = file_path
+        self.ensure_file_exists()
+    
+    def ensure_file_exists(self):
+        if not os.path.exists(self.file_path):
+            with open(self.file_path, 'w') as f:
+                json.dump([], f)
+    
+    def create_task(self, task: Task) -> bool:
+        tasks = self.get_all_tasks()
+        tasks.append(task.dict())
+        return self._save_tasks(tasks)
+    
+    def get_all_tasks(self) -> List[dict]:
+        with open(self.file_path, 'r') as f:
+            return json.load(f)
+    
+    def update_task(self, task_id: str, updates: dict) -> bool:
+        tasks = self.get_all_tasks()
+        for task in tasks:
+            if task['id'] == task_id:
+                task.update(updates)
+                return self._save_tasks(tasks)
+        return False
+    
+    def delete_task(self, task_id: str) -> bool:
+        tasks = self.get_all_tasks()
+        tasks = [t for t in tasks if t['id'] != task_id]
+        return self._save_tasks(tasks)
+    
+    def _save_tasks(self, tasks: List[dict]) -> bool:
+        try:
+            with open(self.file_path, 'w') as f:
+                json.dump(tasks, f, default=str, indent=2)
+            return True
+        except Exception:
+            return False
+```
+
+***
+
+## **Scene 4: LangGraph Agent Core Development**
+
+### **4.1 Agent State Definition**
+```python
+# agents/scheduler_agent.py
+from typing import TypedDict, List, Optional
+from langgraph.graph import StateGraph, END, START
+from langchain_ollama import OllamaLLM
+from data.database import TaskManager, Task
+
+class AgentState(TypedDict):
+    messages: List[dict]
+    current_task: Optional[dict]
+    task_operation: Optional[str]  # create, read, update, delete
+    task_data: Optional[dict]
+    response: Optional[str]
+    error: Optional[str]
+```
+
+### **4.2 LLM Integration Node**
+```python
+def llm_node(state: AgentState) -> AgentState:
+    """Process user input with LLM to understand intent"""
+    llm = OllamaLLM(
+        model="qwen2.5:7b",
+        base_url="http://localhost:11434",
+        temperature=0.1
+    )
+    
+    last_message = state["messages"][-1]["content"]
+    
+    prompt = f"""
+    You are a scheduling assistant. Analyze this user request and extract:
+    1. Action type (create, read, update, delete, list)
+    2. Task details (title, date, time, description)
+    3. Task ID (if updating/deleting)
+    
+    User request: {last_message}
+    
+    Respond with JSON format:
+    {{
+        "action": "create/read/update/delete/list",
+        "task_data": {{
+            "title": "...",
+            "description": "...",
+            "date": "YYYY-MM-DD",
+            "start_time": "HH:MM",
+            "end_time": "HH:MM"
+        }},
+        "task_id": "..." (if applicable)
+    }}
+    """
+    
+    response = llm.invoke(prompt)
+    
+    try:
+        import json
+        parsed_response = json.loads(response)
+        state["task_operation"] = parsed_response.get("action")
+        state["task_data"] = parsed_response.get("task_data", {})
+        state["current_task"] = parsed_response
+    except:
+        state["error"] = "Failed to parse LLM response"
+    
+    return state
+```
+
+### **4.3 Task Operations Node**
+```python
+def task_operations_node(state: AgentState) -> AgentState:
+    """Execute task operations based on LLM analysis"""
+    task_manager = TaskManager()
+    operation = state.get("task_operation")
+    
+    try:
+        if operation == "create":
+            task_data = state["task_data"]
+            task = Task(
+                id=str(uuid.uuid4()),
+                title=task_data.get("title", ""),
+                description=task_data.get("description", ""),
+                date=datetime.strptime(task_data.get("date"), "%Y-%m-%d"),
+                start_time=task_data.get("start_time"),
+                end_time=task_data.get("end_time")
+            )
+            success = task_manager.create_task(task)
+            state["response"] = f"Task '{task.title}' created successfully" if success else "Failed to create task"
+        
+        elif operation == "list":
+            tasks = task_manager.get_all_tasks()
+            state["response"] = f"Found {len(tasks)} tasks: " + ", ".join([t["title"] for t in tasks])
+        
+        elif operation == "delete":
+            task_id = state["current_task"].get("task_id")
+            success = task_manager.delete_task(task_id)
+            state["response"] = "Task deleted successfully" if success else "Failed to delete task"
+        
+        elif operation == "update":
+            task_id = state["current_task"].get("task_id")
+            updates = state["task_data"]
+            success = task_manager.update_task(task_id, updates)
+            state["response"] = "Task updated successfully" if success else "Failed to update task"
+        
+    except Exception as e:
+        state["error"] = str(e)
+        state["response"] = f"Error executing operation: {e}"
+    
+    return state
+```
+
+### **4.4 Response Generation Node**
+```python
+def response_node(state: AgentState) -> AgentState:
+    """Generate natural language response"""
+    if state.get("error"):
+        state["response"] = f"I encountered an error: {state['error']}"
+    
+    # Add response to messages
+    state["messages"].append({
+        "role": "assistant",
+        "content": state["response"]
+    })
+    
+    return state
+```
+
+### **4.5 Graph Assembly**
+```python
+def create_scheduling_agent():
+    """Create the LangGraph scheduling agent"""
+    workflow = StateGraph(AgentState)
+    
+    # Add nodes
+    workflow.add_node("llm_analysis", llm_node)
+    workflow.add_node("task_operations", task_operations_node)
+    workflow.add_node("generate_response", response_node)
+    
+    # Add edges
+    workflow.add_edge(START, "llm_analysis")
+    workflow.add_edge("llm_analysis", "task_operations")
+    workflow.add_edge("task_operations", "generate_response")
+    workflow.add_edge("generate_response", END)
+    
+    return workflow.compile()
+```
+
+***
+
+## **Scene 5: FastAPI Backend Development**
+
+### **5.1 Main API Setup**
+```python
+# main.py
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from agents.scheduler_agent import create_scheduling_agent
+from data.database import TaskManager
+import uvicorn
+
+app = FastAPI(title="Local Scheduling Agent API")
+
+# CORS configuration for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize agent
+scheduling_agent = create_scheduling_agent()
+
+class ChatMessage(BaseModel):
+    message: str
+
+class ChatResponse(BaseModel):
+    response: str
+```
+
+### **5.2 Chat Endpoint**
+```python
+@app.post("/chat", response_model=ChatResponse)
+async def chat_with_agent(message: ChatMessage):
+    """Main chat endpoint for interacting with scheduling agent"""
+    try:
+        initial_state = {
+            "messages": [{"role": "user", "content": message.message}],
+            "current_task": None,
+            "task_operation": None,
+            "task_data": None,
+            "response": None,
+            "error": None
+        }
+        
+        final_state = scheduling_agent.invoke(initial_state)
+        
+        return ChatResponse(response=final_state["response"])
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+```
+
+### **5.3 Task Management Endpoints**
+```python
+@app.get("/tasks")
+async def get_all_tasks():
+    """Get all tasks for calendar display"""
+    task_manager = TaskManager()
+    return {"tasks": task_manager.get_all_tasks()}
+
+@app.get("/tasks/today")
+async def get_today_tasks():
+    """Get today's tasks"""
+    task_manager = TaskManager()
+    from datetime import date
+    today = date.today().isoformat()
+    
+    all_tasks = task_manager.get_all_tasks()
+    today_tasks = [t for t in all_tasks if t.get("date", "").startswith(today)]
+    
+    return {"tasks": today_tasks}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "model": "qwen2.5:7b"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+```
+
+***
+
+## **Scene 6: React Frontend - Chat Interface**
+
+### **6.1 Chat Component**
+```jsx
+// components/ChatInterface.js
+import { useState, useRef, useEffect } from 'react';
+import axios from 'axios';
+
+const ChatInterface = () => {
+    const [messages, setMessages] = useState([
+        { role: 'assistant', content: 'Hello! I\'m your scheduling assistant. How can I help you manage your tasks today?' }
+    ]);
+    const [inputValue, setInputValue] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const messagesEndRef = useRef(null);
+
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
+
+    useEffect(scrollToBottom, [messages]);
+
+    const sendMessage = async (e) => {
+        e.preventDefault();
+        if (!inputValue.trim() || isLoading) return;
+
+        const userMessage = { role: 'user', content: inputValue };
+        setMessages(prev => [...prev, userMessage]);
+        setInputValue('');
+        setIsLoading(true);
+
+        try {
+            const response = await axios.post('http://localhost:8000/chat', {
+                message: inputValue
+            });
+
+            const assistantMessage = { 
+                role: 'assistant', 
+                content: response.data.response 
+            };
+            setMessages(prev => [...prev, assistantMessage]);
+        } catch (error) {
+            const errorMessage = { 
+                role: 'assistant', 
+                content: 'Sorry, I encountered an error. Please try again.' 
+            };
+            setMessages(prev => [...prev, errorMessage]);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <div className="flex flex-col h-screen max-w-4xl mx-auto p-4">
+            <div className="flex-1 overflow-y-auto mb-4 space-y-4">
+                {messages.map((message, index) => (
+                    <div
+                        key={index}
+                        className={`p-4 rounded-lg ${
+                            message.role === 'user'
+                                ? 'bg-blue-500 text-white ml-12'
+                                : 'bg-gray-200 text-black mr-12'
+                        }`}
+                    >
+                        {message.content}
+                    </div>
+                ))}
+                {isLoading && (
+                    <div className="bg-gray-200 text-black mr-12 p-4 rounded-lg">
+                        <div className="animate-pulse">Thinking...</div>
+                    </div>
+                )}
+                <div ref={messagesEndRef} />
+            </div>
+            
+            <form onSubmit={sendMessage} className="flex space-x-2">
+                <input
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    placeholder="Type your message here..."
+                    className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={isLoading}
+                />
+                <button
+                    type="submit"
+                    disabled={isLoading || !inputValue.trim()}
+                    className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Send
+                </button>
+            </form>
+        </div>
+    );
+};
+
+export default ChatInterface;
+```
+
+***
+
+## **Scene 7: React Frontend - Calendar Interface**
+
+### **7.1 Calendar Component with FullCalendar**
+```jsx
+// components/CalendarView.js
+import { useState, useEffect } from 'react';
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import axios from 'axios';
+
+const CalendarView = () => {
+    const [events, setEvents] = useState([]);
+    const [todayTasks, setTodayTasks] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    const fetchTasks = async () => {
+        try {
+            const [allTasksRes, todayTasksRes] = await Promise.all([
+                axios.get('http://localhost:8000/tasks'),
+                axios.get('http://localhost:8000/tasks/today')
+            ]);
+
+            // Convert tasks to FullCalendar events format
+            const calendarEvents = allTasksRes.data.tasks.map(task => ({
+                id: task.id,
+                title: task.title,
+                start: task.date,
+                end: task.date,
+                allDay: !task.start_time,
+                backgroundColor: task.status === 'completed' ? '#10B981' : '#3B82F6',
+                extendedProps: {
+                    description: task.description,
+                    status: task.status,
+                    priority: task.priority
+                }
+            }));
+
+            setEvents(calendarEvents);
+            setTodayTasks(todayTasksRes.data.tasks);
+        } catch (error) {
+            console.error('Error fetching tasks:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchTasks();
+        // Refresh every 30 seconds
+        const interval = setInterval(fetchTasks, 30000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const handleEventClick = (clickInfo) => {
+        alert(`Task: ${clickInfo.event.title}\nDescription: ${clickInfo.event.extendedProps.description}`);
+    };
+
+    if (loading) {
+        return <div className="flex justify-center items-center h-screen">Loading calendar...</div>;
+    }
+
+    return (
+        <div className="p-6 max-w-7xl mx-auto">
+            <h1 className="text-3xl font-bold mb-6">Schedule Calendar</h1>
+            
+            {/* Today's Tasks Section */}
+            <div className="mb-8">
+                <h2 className="text-2xl font-semibold mb-4">Today's Tasks ({todayTasks.length})</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {todayTasks.map(task => (
+                        <div key={task.id} className="bg-white p-4 rounded-lg shadow border-l-4 border-blue-500">
+                            <h3 className="font-semibold text-lg">{task.title}</h3>
+                            {task.description && (
+                                <p className="text-gray-600 mt-2">{task.description}</p>
+                            )}
+                            <div className="flex justify-between items-center mt-3">
+                                <span className={`px-2 py-1 rounded text-sm ${
+                                    task.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                    task.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                    'bg-red-100 text-red-800'
+                                }`}>
+                                    {task.status}
+                                </span>
+                                {task.start_time && (
+                                    <span className="text-sm text-gray-500">
+                                        {task.start_time} - {task.end_time}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                {todayTasks.length === 0 && (
+                    <p className="text-gray-500 italic">No tasks scheduled for today.</p>
+                )}
+            </div>
+
+            {/* Full Calendar */}
+            <div className="bg-white p-6 rounded-lg shadow">
+                <FullCalendar
+                    plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+                    headerToolbar={{
+                        left: 'prev,next today',
+                        center: 'title',
+                        right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                    }}
+                    initialView="dayGridMonth"
+                    events={events}
+                    eventClick={handleEventClick}
+                    height="600px"
+                    editable={false}
+                    selectable={true}
+                    dayMaxEvents={3}
+                    eventDisplay="block"
+                />
+            </div>
+        </div>
+    );
+};
+
+export default CalendarView;
+```
+
+***
+
+## **Scene 8: Next.js Pages Setup**
+
+### **8.1 Chat Page**
+```jsx
+// pages/chat.js
+import ChatInterface from '../components/ChatInterface';
+import Link from 'next/link';
+
+export default function ChatPage() {
+    return (
+        <div className="min-h-screen bg-gray-50">
+            <nav className="bg-white shadow-sm border-b p-4">
+                <div className="max-w-4xl mx-auto flex justify-between items-center">
+                    <h1 className="text-xl font-semibold">Scheduling Assistant</h1>
+                    <div className="space-x-4">
+                        <Link href="/chat" className="text-blue-600 font-medium">Chat</Link>
+                        <Link href="/calendar" className="text-gray-600 hover:text-blue-600">Calendar</Link>
+                    </div>
+                </div>
+            </nav>
+            <ChatInterface />
+        </div>
+    );
+}
+```
+
+### **8.2 Calendar Page**
+```jsx
+// pages/calendar.js
+import CalendarView from '../components/CalendarView';
+import Link from 'next/link';
+
+export default function CalendarPage() {
+    return (
+        <div className="min-h-screen bg-gray-50">
+            <nav className="bg-white shadow-sm border-b p-4">
+                <div className="max-w-7xl mx-auto flex justify-between items-center">
+                    <h1 className="text-xl font-semibold">Scheduling Assistant</h1>
+                    <div className="space-x-4">
+                        <Link href="/chat" className="text-gray-600 hover:text-blue-600">Chat</Link>
+                        <Link href="/calendar" className="text-blue-600 font-medium">Calendar</Link>
+                    </div>
+                </div>
+            </nav>
+            <CalendarView />
+        </div>
+    );
+}
+```
+
+### **8.3 Index Page (Default Route)**
+```jsx
+// pages/index.js
+import { useEffect } from 'react';
+import { useRouter } from 'next/router';
+
+export default function HomePage() {
+    const router = useRouter();
+    
+    useEffect(() => {
+        router.push('/chat');
+    }, [router]);
+    
+    return (
+        <div className="flex justify-center items-center h-screen">
+            <div className="text-center">
+                <h1 className="text-2xl font-bold mb-4">Loading Scheduling Assistant...</h1>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
+            </div>
+        </div>
+    );
+}
+```
+
+***
+
+## **Scene 9: Configuration & Styling**
+
+### **9.1 Tailwind CSS Setup**
+```javascript
+// tailwind.config.js
+module.exports = {
+  content: [
+    "./pages/**/*.{js,ts,jsx,tsx}",
+    "./components/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+```
+
+### **9.2 Global Styles**
+```css
+/* styles/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.fc-event {
+    border-radius: 6px !important;
+    padding: 2px 4px !important;
+}
+
+.fc-daygrid-event {
+    font-size: 0.875rem !important;
+}
+```
+
+***
+
+## **Scene 10: Testing & Deployment**
+
+### **10.1 Backend Testing Script**
+```python
+# test_agent.py
+import requests
+import json
+
+def test_backend():
+    base_url = "http://localhost:8000"
+    
+    # Test health check
+    health_response = requests.get(f"{base_url}/health")
+    print(f"Health Check: {health_response.json()}")
+    
+    # Test chat functionality
+    test_messages = [
+        "Create a task: Doctor appointment tomorrow at 2 PM",
+        "Show me all my tasks",
+        "Delete the doctor appointment task"
+    ]
+    
+    for message in test_messages:
+        response = requests.post(f"{base_url}/chat", 
+                               json={"message": message})
+        print(f"Message: {message}")
+        print(f"Response: {response.json()}\n")
+
+if __name__ == "__main__":
+    test_backend()
+```
+
+### **10.2 Startup Scripts**
+```bash
+#!/bin/bash
+# start_backend.sh
+cd backend
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+```bash
+#!/bin/bash
+# start_frontend.sh
+cd frontend
+npm run dev
+```
+
+### **10.3 Complete Startup Script**
+```bash
+#!/bin/bash
+# start_all.sh
+echo "Starting Ollama..."
+ollama serve &
+
+echo "Pulling Qwen 2.5 model..."
+ollama pull qwen2.5:7b
+
+echo "Starting backend..."
+cd backend && python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000 &
+
+echo "Starting frontend..."
+cd frontend && npm run dev &
+
+echo "All services started!"
+echo "Chat interface: http://localhost:3000/chat"
+echo "Calendar view: http://localhost:3000/calendar"
+echo "Backend API: http://localhost:8000"
+```
+
+***
+
+## **Scene 11: Usage Examples & Sample Prompts**
+
+### **Example User Interactions:**
+1. **"Create a meeting with Sarah tomorrow at 3 PM"**
+2. **"Show me all my tasks for this week"**
+3. **"Cancel my dentist appointment on Friday"**
+4. **"Reschedule the project review to next Monday at 10 AM"**
+5. **"What do I have scheduled for today?"**
+
+This comprehensive plan provides everything needed to build a fully functional local scheduling agent. Each scene builds upon the previous one, ensuring a smooth development process that GitHub Copilot or Claude 4 can execute systematically.[7][2][3][8][9][4]
+
+[1](https://www.databasemart.com/blog/ollama-gpu-benchmark-rtx3060ti)
+[2](https://fullcalendar.io/docs/react)
+[3](https://realpython.com/langgraph-python/)
+[4](https://www.databasemart.com/blog/choosing-the-right-gpu-for-popluar-llms-on-ollama)
+[5](https://www.ankursnewsletter.com/p/comparing-open-source-ai-models-llama)
+[6](https://www.leadergpu.com/catalog/579-qwen-2-vs-llama-3)
+[7](https://datasciencedojo.com/blog/langgraph-tutorial/)
+[8](https://www.youtube.com/watch?v=cy6EAp4iNN4)
+[9](https://fastapi.tiangolo.com)
+[10](https://www.reddit.com/r/LocalLLaMA/comments/1btbmmv/which_gpu_can_run_llm_locally_faster_gtx_1070_or/)
+[11](https://www.npmjs.com/package/@techvootsolutions%2Freact-fullcalendar-custom-ui)
+[12](https://ai.gopubby.com/langgraph-building-a-dynamic-order-management-system-a-step-by-step-tutorial-0be56854fc91)
+[13](https://news.ycombinator.com/item?id=44134896)
+[14](https://blog.nonstopio.com/elevate-your-react-full-calendar-unleashing-full-potential-53b783b4b021)
+[15](https://intuitionlabs.ai/articles/local-llm-deployment-24gb-gpu-optimization)
+[16](https://www.youtube.com/watch?v=jGg_1h0qzaM)
+[17](https://www.npmjs.com/package/@fullcalendar/react)
+[18](https://academy.langchain.com/courses/intro-to-langgraph)
+[19](https://fullcalendar.io)
+[20](https://dev.to/maximsaplin/running-local-llms-cpu-vs-gpu-a-quick-speed-test-2cjn)
+[21](https://www.langchain.com/langgraph)
+[22](https://jaydevm.hashnode.dev/9-react-calendar-components-for-your-next-app)
+[23](https://apxml.com/posts/best-local-llms-for-every-nvidia-rtx-50-series-gpu)
+[24](https://langchain-ai.github.io/langgraph/concepts/why-langgraph/)
+[25](https://demo.mobiscroll.com/react/scheduler)
+[26](https://purecode.ai/components/nextjs/calendar)
+[27](https://www.turing.com/kb/fastapi-vs-flask-a-detailed-comparison)
+[28](https://www.labellerr.com/blog/qwen-2-5-vl-vs-llama-3-2/)
+[29](https://www.telerik.com/blogs/how-to-implement-scheduler-component-react-application)
+[30](https://www.youtube.com/watch?v=lBzhUl_1bYo)
+[31](https://themeselection.com/react-calendar-component-library-examples/)
+[32](https://www.reddit.com/r/Python/comments/1dxcdiy/flask_django_or_fastapi/)
+[33](https://www.reddit.com/r/LocalLLaMA/comments/1isi9rw/what_is_the_current_overall_best_local_model_for/)
+[34](https://code.daypilot.org/tutorials/react)
+[35](https://www.linkedin.com/pulse/best-tools-build-ai-agents-python-2025-guide-nuno-bispo-8prxe)
+[36](https://apxml.com/posts/gpu-system-requirements-qwen-models)
+[37](https://www.youtube.com/watch?v=3CMgznBdl-M)
+[38](https://www.youtube.com/watch?v=yd0kgDwkfz0)
+[39](https://www.reddit.com/r/nextjs/comments/1ela0bu/is_there_a_library_or_tutorial_available_to/)
